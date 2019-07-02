@@ -2,19 +2,21 @@
 
 from rplidar import RPLidar
 from concurrent.futures import ThreadPoolExecutor
-from threading import Thread, Lock, current_thread
+from threading import Thread, Lock, Event
 from collections import deque
 import time 
 import sys
 import paho.mqtt.client as mqtt
 import os
 import copy
+import logging
+import math
 
 """
 CONSTANT for lidar program
 """
 
-RECORD_CONSTANT = 200
+RECORD_CONSTANT = 100
 ROUND_DECIMAL_ANGLE = 2
 ROUND_DECIMAL_WHOLE = 1
 RASPI_CAM_HORIZ_FOV_ANGLE = 62.2 
@@ -23,13 +25,23 @@ INIT_TIME = -1
 NOT_EXIST = -1
 TIME_EPSILON = 0.5
 ANGLE_EPSILON = 1
+
 """
 Deque data structure is thread-safe. 
 Lock is unused
 """
 lidar_data_deque = deque([(INIT_TIME, {}) for i in range(RECORD_CONSTANT)])
-mqtt_process_lock = Lock()
+lidar_data_lock = Lock()
 
+
+"""
+Optimized Implementaiton
+"""
+current_sec_lidar_reading = {}
+current_second_unix_time = None
+lidar_data_list = list([(INIT_TIME, {}) for i in range(RECORD_CONSTANT)])
+cv = Event()
+cv.set()
 
 
 """
@@ -48,18 +60,28 @@ def round_off(number):
     return (round(number[1]* ROUND_DECIMAL_ANGLE)/ROUND_DECIMAL_ANGLE, number[2])
 
 
-def organize_file(scan, measured_time, iteration): 
-    start_time = time.time()
-    print("Task Executed {}".format(current_thread()))
-    index = iteration % RECORD_CONSTANT
-    round_time = round(measured_time, ROUND_DECIMAL_WHOLE)
+def parse_data(scan, measured_time, iteration):  
+    global current_second_unix_time
+    #global lidar_data_list
+    global RECORD_CONSTANT
+    global current_sec_lidar_reading
+    print (current_second_unix_time, measured_time)  
     
+    if current_second_unix_time != None and (measured_time - current_second_unix_time) >= 1.0: 
+        print ("ONESEC")
+        map_index = current_second_unix_time % RECORD_CONSTANT
+        print ("modulo: ", map_index)
+        print ("size: ", len(lidar_data_list))
+        lidar_data_list[map_index] = (current_second_unix_time, current_sec_lidar_reading)
+        print ("assignment")
+        current_sec_lidar_reading = {}
+        print ("initializ")
+    current_second_unix_time = math.floor(measured_time)  
     lidar_data_list = map(round_off, scan)   
-    lidar_data_map = dict(lidar_data_list)
-    lidar_data_deque.append((round_time, lidar_data_map))
-    lidar_data_deque.popleft()
-    end_time = time.time() 
-    print ("finished process of thread: ", end_time - start_time)
+    current_sec_lidar_reading.update(lidar_data_list)
+
+    #print("Task Executed {}".format(current_thread()))
+    #print ("finished process of thread: ", end_time - start_time)
     #time.sleep(150)
     """
     Comment out the code below to check how many data points were preserved upon 
@@ -83,18 +105,21 @@ def run_lidar_client():
     health = lidar.get_health()
     print(health)
     start_time = time.time()
+    
     for i, scan in enumerate(lidar.iter_scans(max_buf_meas=5000)):
         #print('%d: Got %d measurments' % (i, len(scan)))
-        
+        while not cv.isSet(): 
+            print ("LOCKING")
+            cv.wait() 
         current_time = round(time.time(), ROUND_DECIMAL_WHOLE)
        #print ('===========================')
         #print ('measurement at time: %f' % current_time)
         #print(scan, '\n')
         if i == 100000:
             break
-        print ("Back to iteration: ", time.time() - start_time)
-        executor.submit(organize_file, scan, current_time, i)
-        start_time = time.time()
+        #print ("Back to iteration: ", time.time() - start_time)
+        executor.submit(parse_data, scan, current_time, i)
+        #start_time = time.time()
         
         #time.sleep(150)
     #print (lidar_data_bank)
@@ -117,19 +142,20 @@ def compute_lidar_angle(x_coordinate):
 Iterate to find the closest lidar reading
 """
 def find_closest_time_index(given_time, lidar_data_list):  
+    global TIME_EPSILON
     for index in range(0, len(lidar_data_list)): 
         time, _ = lidar_data_list[index]
         time_difference = abs(time - given_time)
         if time_difference  < TIME_EPSILON: 
+            print ('FOUND TIME')
             return index, time
-            
+    
     return None, NOT_EXIST
 
 
 def find_dist_from_angle(computed_angle, lidar_data_tuple): 
     smallest_difference = MAX_INT
     recorded_depth = NOT_EXIST
-
     _, lidar_data = lidar_data_tuple
     for recorded_angle in lidar_data: 
         angle_difference = abs(computed_angle - recorded_angle)
@@ -139,21 +165,35 @@ def find_dist_from_angle(computed_angle, lidar_data_tuple):
             print ("ANGLE RECORDED FROM LIDAR ", recorded_angle)
     return recorded_depth
 
-def on_message(client, userdata, message):
+
+def on_message(client, userdata, message):    
     payload = str(message.payload.decode("utf-8"))
     x_coordinate, given_time = map(float, payload.split(","))
     print("x-coordinate received:  " , x_coordinate)
     print("unix time recieved: ", given_time)
-    copy_lidar_data = copy.deepcopy(lidar_data_deque)
-    estimated_time_index, estimated_time  = find_closest_time_index(given_time, copy_lidar_data)
+    global cv
+    global lidar_data_list
+    cv.clear()
+    
+    estimated_time_index, estimated_time  = find_closest_time_index(given_time, lidar_data_list)
     depth = NOT_EXIST
+
+    zero_counter = 0
+    for unix_time, readings in lidar_data_list: 
+        if unix_time == -1: 
+            zero_counter += 1
+            continue
+        print (unix_time)
+    print ('zero: ', zero_counter)
+
+    time.sleep(5)
     if estimated_time != NOT_EXIST: 
         computed_angle = compute_lidar_angle(x_coordinate)
         print ("ANGLE COMPUTED FROM X-COORD: ", computed_angle)
         print ("TIME RECORDED WITH LIDAR: ", estimated_time)
-        depth = find_dist_from_angle(computed_angle, copy_lidar_data[estimated_time_index])
-        print ("THIS IS DEPTH: ", depth)
+        depth = find_dist_from_angle(computed_angle, lidar_data_list[estimated_time_index])
     print("DONE CALLBACK")
+    cv.set()
     
     client.publish(pub_channel, depth)
     """
