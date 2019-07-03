@@ -23,7 +23,7 @@ RASPI_CAM_HORIZ_FOV_ANGLE = 62.2
 MAX_INT = sys.maxsize
 INIT_TIME = -1
 NOT_EXIST = -1
-TIME_EPSILON = 0.5
+TIME_EPSILON = 1
 ANGLE_EPSILON = 1
 
 """
@@ -62,23 +62,20 @@ def round_off(number):
 
 def parse_data(scan, measured_time, iteration):  
     global current_second_unix_time
-    #global lidar_data_list
+    global lidar_data_list
     global RECORD_CONSTANT
     global current_sec_lidar_reading
-    print (current_second_unix_time, measured_time)  
     
-    if current_second_unix_time != None and (measured_time - current_second_unix_time) >= 1.0: 
-        print ("ONESEC")
-        map_index = current_second_unix_time % RECORD_CONSTANT
-        print ("modulo: ", map_index)
-        print ("size: ", len(lidar_data_list))
-        lidar_data_list[map_index] = (current_second_unix_time, current_sec_lidar_reading)
-        print ("assignment")
+    if current_second_unix_time != None and abs(measured_time - current_second_unix_time) >= 0.5: 
         current_sec_lidar_reading = {}
-        print ("initializ")
-    current_second_unix_time = math.floor(measured_time)  
-    lidar_data_list = map(round_off, scan)   
-    current_sec_lidar_reading.update(lidar_data_list)
+    #Not floor function 
+    current_second_unix_time = round(measured_time) 
+
+    map_index = current_second_unix_time % RECORD_CONSTANT
+    print (current_second_unix_time, measured_time)
+    lidar_data_list[map_index] = (current_second_unix_time, current_sec_lidar_reading)
+    lidar_data = map(round_off, scan)   
+    current_sec_lidar_reading.update(lidar_data)
 
     #print("Task Executed {}".format(current_thread()))
     #print ("finished process of thread: ", end_time - start_time)
@@ -143,26 +140,39 @@ Iterate to find the closest lidar reading
 """
 def find_closest_time_index(given_time, lidar_data_list):  
     global TIME_EPSILON
+    global NOT_EXIST
+    
+    stored_index, stored_time = None, NOT_EXIST
+    shortest_diff = sys.maxsize
     for index in range(0, len(lidar_data_list)): 
         time, _ = lidar_data_list[index]
         time_difference = abs(time - given_time)
-        if time_difference  < TIME_EPSILON: 
+        if time_difference < 3: 
+            print ("time measure: ", given_time, time)
+        if time_difference  < TIME_EPSILON and time_difference < shortest_diff : 
             print ('FOUND TIME')
-            return index, time
+            stored_index = index
+            stored_time = time
+            shortest_time = time_difference
     
-    return None, NOT_EXIST
+    return stored_index, stored_time
 
 
 def find_dist_from_angle(computed_angle, lidar_data_tuple): 
     smallest_difference = MAX_INT
     recorded_depth = NOT_EXIST
     _, lidar_data = lidar_data_tuple
+    print ("--------\n")
+    
     for recorded_angle in lidar_data: 
         angle_difference = abs(computed_angle - recorded_angle)
+        print ("computed/recorded angle: ", computed_angle, recorded_angle)
         if angle_difference < ANGLE_EPSILON and angle_difference < smallest_difference: 
             smallest_difference = angle_difference 
             recorded_depth = lidar_data[recorded_angle]
             print ("ANGLE RECORDED FROM LIDAR ", recorded_angle)
+    print ("--------\n")
+
     return recorded_depth
 
 
@@ -177,25 +187,16 @@ def on_message(client, userdata, message):
     
     estimated_time_index, estimated_time  = find_closest_time_index(given_time, lidar_data_list)
     depth = NOT_EXIST
-
-    zero_counter = 0
-    for unix_time, readings in lidar_data_list: 
-        if unix_time == -1: 
-            zero_counter += 1
-            continue
-        print (unix_time)
-    print ('zero: ', zero_counter)
-
-    time.sleep(5)
+    #time.sleep(5)
     if estimated_time != NOT_EXIST: 
         computed_angle = compute_lidar_angle(x_coordinate)
         print ("ANGLE COMPUTED FROM X-COORD: ", computed_angle)
         print ("TIME RECORDED WITH LIDAR: ", estimated_time)
         depth = find_dist_from_angle(computed_angle, lidar_data_list[estimated_time_index])
     print("DONE CALLBACK")
+    client.publish(pub_channel, depth)
     cv.set()
     
-    client.publish(pub_channel, depth)
     """
     SEND back a response based on the depth of the cone 
     """
