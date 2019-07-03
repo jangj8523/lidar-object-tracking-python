@@ -100,6 +100,7 @@ def parse_data(scan, measured_time, iteration):
 
 def run_lidar_client():
     executor = ThreadPoolExecutor(max_workers=10)
+
     lidar = RPLidar('/dev/ttyUSB0')
     info = lidar.get_info()
     print(info)
@@ -108,7 +109,8 @@ def run_lidar_client():
     print(health)
     start_time = time.time()
 
-    for i, scan in enumerate(lidar.iter_scans(max_buf_meas=5000)):
+    # for i, scan in enumerate(lidar.iter_scans(max_buf_meas=5000)):
+    for i, scan in enumerate(buggy):
         #print('%d: Got %d measurments' % (i, len(scan)))
         while not cv.isSet():
             print ("LOCKING")
@@ -117,6 +119,9 @@ def run_lidar_client():
        #print ('===========================')
         #print ('measurement at time: %f' % current_time)
         #print(scan, '\n')
+        esc = raw_input()
+        if esc == "n":
+            break
         if i == 100000:
             break
         #print ("Back to iteration: ", time.time() - start_time)
@@ -238,7 +243,7 @@ def main():
 
     print ("==== START LIDAR ======")
     run_lidar_client()
-    sanity_check()
+    # sanity_check()
 
 if __name__=="__main__":
     main()
