@@ -1,0 +1,18 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/Users/jae/Desktop/lidar/lidar_implementation/PrintObject.h
+iostream
+-
+
+/Users/jae/Desktop/lidar/lidar_implementation/sample.cpp
+iostream
+-
+PrintObject.h
+/Users/jae/Desktop/lidar/lidar_implementation/PrintObject.h
+
